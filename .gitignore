@@ -2,3 +2,10 @@ best_model*
 flavordb.db
 .vscode
 entity_mole_group.csv
+__pycache__
+*.txt
+figures
+
+temp.py
+test.ipynb
+logs

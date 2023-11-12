@@ -1,50 +1,56 @@
 from matplotlib import pyplot as plt
 
 def main():
-    eval_loss = [0.01106424629688263, 
-    0.002036006422713399,
-    0.0011896648211404681,
-    0.000784509174991399,
-    0.0004359440063126385,
-    0.00046205782564356923,
-    0.00036975322291254997,
-    0.00039013446075841784,
-    0.00040770869236439466,
-    0.0004132803878746927,
-    0.00039774063043296337,
-    0.0003999907639808953
+    eval_loss = [
+        # 0.410,
+        0.1,
+        0.027,
+        0.0265,
+        0.0268,
+        0.027,
+        0.028,
+        0.029,
+        0.0307,
+        0.030,
+        0.0314,
     ]
 
     train_loss = [
-        0.0198,
-        0.0052,
-        0.0039,
-        0.0024,
-        0.0009,
-        0.0008,
-        0.0005,
-        0.0003,
-        0.0003,
-        0.0004,
-        0.0002,
-        0.0003
+        # 18.4127,
+        # 2.0,
+        0.1,
+        0.0325,
+        0.026,
+        0.0223,
+        0.02,
+        0.0183,
+        0.0172,
+        0.0162,
+        0.0157,
+        0.0154,
     ]
+
+    # Define the x-axis values
+    epochs = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
 
     # Plot eval_loss in blue and label it as "Eval Loss"
     plt.figure(figsize=(10,7))
-    plt.plot(eval_loss, label='Eval Loss', color='blue')
+    plt.plot(epochs, eval_loss, label='Eval Loss', color='blue')  # Plot with defined epochs
 
     # Plot train_loss in red and label it as "Train Loss"
-    plt.plot(train_loss, label='Train Loss', color='red')
+    plt.plot(epochs, train_loss, label='Train Loss', color='red')  # Plot with defined epochs
 
     # Add labels and a legend
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
+    plt.xticks(epochs)  # Set x-axis ticks
+    plt.ylim(0, 0.05)  # Set y-axis range
     plt.legend()
 
     # Show the plot
+    plt.savefig('plot.png')
     plt.show()
-    print()
 
+# Call the main function to execute the plotting
 if __name__ == '__main__':
     main()

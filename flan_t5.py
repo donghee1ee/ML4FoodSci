@@ -1,8 +1,8 @@
-import sqlite3
-import pandas as pd
-import ast
-from sklearn.model_selection import train_test_split
-from transformers import T5Tokenizer, T5ForConditionalGeneration, TrainingArguments, Trainer
+# import sqlite3
+# import pandas as pd
+# import ast
+# from sklearn.model_selection import train_test_split
+from transformers import T5Tokenizer, TrainingArguments, Trainer
 from datasets import Dataset
 from nltk.translate.bleu_score import sentence_bleu
 from transformers import EvalPrediction
@@ -11,39 +11,17 @@ import torch
 from tqdm import tqdm
 import random
 import numpy as np
+import logging
+
+from model import ConstrainedT5
+from utils import get_constraint_ids, prepare_data, TokenizerWrapper
+
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
+logger = logging.getLogger(__name__)
 
 prompt = 'Predict the flavor given the following chemical compounds: '
-tokenizer = T5Tokenizer.from_pretrained("t5-base")
+# tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-base")
 
-def prepare_data():
-    csv_df = pd.read_csv('entity_mole_group.csv')
-    csv_df['molecule_id'] = csv_df['molecule_id'].apply(lambda x: list(ast.literal_eval(x.replace("{", "[").replace("}", "]"))))
-
-    conn = sqlite3.connect('flavordb.db')
-    query = "SELECT entity_id, entity_alias_readable FROM food_entities"
-    sql_df = pd.read_sql_query(query, conn)
-
-    query = "SELECT id, common_name FROM molecules"
-    molecule_map_df = pd.read_sql_query(query, conn)
-    conn.close()
-
-    molecule_map_df['common_name'] = molecule_map_df['common_name'].str.replace(' ', '_')
-    molecule_map_dict = dict(zip(molecule_map_df.id, molecule_map_df.common_name))
-    csv_df['molecule_name'] = csv_df['molecule_id'].apply(lambda ids: [molecule_map_dict[id] for id in ids])
-
-
-    df = pd.merge(sql_df, csv_df, on='entity_id', how='inner') 
-    df = df.rename(columns={'entity_alias_readable': 'entity_name'}) ## X: molecule_name, Y: entity_name
-
-    df['input_text'] = df['molecule_name'].apply(lambda x: ' '.join(sorted(x, key=lambda k: random.random())))
-    df['input_text'] = prompt + df['input_text']
-    df['labels'] = df['entity_name']
-    df['output_text'] = df['entity_name']
-
-    train_df, temp_df = train_test_split(df, test_size=0.3, random_state=42)
-    val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42)
-    
-    return train_df, val_df, test_df
 
 def compute_metrics(p: EvalPrediction): ## TODO - 아마 eval dataset 전부 로드가 되니까 cuda out of memory 뜨는 듯
     # decode
@@ -143,15 +121,18 @@ def custom_train():
                 all_preds.extend([tokenizer.decode(tokens) for tokens in pred_tokens])
                 all_targets.extend([row['target_text']])
 
-def main():
+def train():
     #######
     lr = 1e-04
     epochs = 20
     batch_size = 8
-    output_dir="./best_model3"
+    output_dir="./best_model_with_constraints_large"
+    logging_dir = './logs'
+    model_name = "google/flan-t5-base"
     #######
+    logger.info("####### main start #######")
 
-    train_df, val_df, test_df = prepare_data()
+    train_df, val_df, test_df = prepare_data(prompt)
 
     # Initialize the tokenizer
     # tokenizer = T5Tokenizer.from_pretrained("t5-small")
@@ -164,35 +145,17 @@ def main():
     # train_dataset = train_dataset.map(lambda x: tokenizer(x['input_text'], max_length=512, truncation=True), batched=True)
     # val_dataset = val_dataset.map(lambda x: tokenizer(x['input_text'], max_length=512, truncation=True), batched=True)
     # test_dataset = test_dataset.map(lambda x: tokenizer(x['input_text'], max_length=512, truncation=True), batched=True)
-    def tokenize_function(examples):
-        tokenized_input = tokenizer(
-            examples['input_text'],
-            max_length=512,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt"
-        )
-        tokenized_output = tokenizer(
-            examples['labels'],
-            max_length=512,
-            truncation=True,
-            padding="max_length",
-            return_tensors="pt"
-        )
-        return {
-            'input_ids': tokenized_input.input_ids,
-            'attention_mask': tokenized_input.attention_mask,
-            'decoder_input_ids': tokenized_output.input_ids,
-            'labels': tokenized_output.input_ids  # Including labels for loss computation
-        }
+    tokenizer = T5Tokenizer.from_pretrained(model_name)
+    tokenizer_wrapper = TokenizerWrapper(tokenizer)
 
-    train_dataset = train_dataset.map(tokenize_function, batched=True)
-    val_dataset = val_dataset.map(tokenize_function, batched=True)
-    test_dataset = test_dataset.map(tokenize_function, batched=True)
+    train_dataset = train_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
+    val_dataset = val_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
+    test_dataset = test_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
 
+    constraint_ids = get_constraint_ids(tokenizer)
 
-    # Load the T5 model
-    model = T5ForConditionalGeneration.from_pretrained("t5-base")
+    # Load the flan-T5 model
+    model = ConstrainedT5.from_pretrained(model_name, constraint_ids=constraint_ids)
 
     # Define training arguments and initialize trainer
     training_args = TrainingArguments(
@@ -200,16 +163,19 @@ def main():
         per_device_eval_batch_size=batch_size,
         num_train_epochs=epochs,
         evaluation_strategy="epoch",
-        logging_dir='./logs',
-        logging_steps=10,
+        logging_dir=logging_dir,
+        logging_strategy = 'epoch',##
+        # logging_steps=10,##
         do_train=True,
         do_eval=True,
         output_dir=output_dir,
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model='fuzzy_ratio',
-        greater_is_better=True,
+        metric_for_best_model='loss',
+        greater_is_better=False,
         learning_rate=lr,
+        warmup_steps=100,
+        weight_decay=0.01,
     )
 
     trainer = Trainer(
@@ -217,8 +183,8 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics
+        # tokenizer=tokenizer,
+        # compute_metrics=compute_metrics
     )
 
     # Train the model
@@ -229,44 +195,93 @@ def main():
     model.save_pretrained(output_dir)
 
     print("* Test start *")
-    test(model, tokenizer, test_dataset)
-    print("END")
+    test_results = trainer.evaluate(test_dataset)
+    print(test_results)
+    print("")
 
-def test(model, tokenizer, test_dataset): ## TODO ## test_dataset batchsize 안 정해줘서 그냥 하나씩?
-    model.eval()
 
-    total_fuzzy_score = 0
+def test(model, tokenizer): ## TODO ## test_dataset batchsize 안 정해줘서 그냥 하나씩?
+    #######
+    lr = 1e-04
+    epochs = 2
+    batch_size = 8
+    output_dir="./best_model_with_constraints2"
+    logging_dir = './logs'
+    #######
 
-    # Iterate over the test dataset
-    for row in tqdm(test_dataset, desc="Testing"):
-        input_sequence = row["input_text"]
-        target_sequence = row["output_text"]
+    train_df, val_df, test_df = prepare_data(prompt)
 
-        # Tokenize the input sequence
-        input_ids = tokenizer(input_sequence, return_tensors="pt").input_ids ## TODO
-        input_ids = input_ids.to('cuda')
+    # Initialize the tokenizer
+    # tokenizer = T5Tokenizer.from_pretrained("t5-small")
 
-        # Generate a prediction
-        with torch.no_grad():
-            output_ids = model.generate(input_ids)
+    # Tokenize the data
+    train_dataset = Dataset.from_pandas(train_df)
+    val_dataset = Dataset.from_pandas(val_df)
+    test_dataset = Dataset.from_pandas(test_df)
 
-        # Decode the output IDs to a string
-        output = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    tokenizer_wrapper = TokenizerWrapper(tokenizer)
 
-        # Calculate Fuzzy Score
-        fuzzy_score = fuzz.ratio(output, target_sequence)
-        total_fuzzy_score += fuzzy_score
+    train_dataset = train_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
+    val_dataset = val_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
+    test_dataset = test_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
 
-        if random.randint(1,100) < 10:
-            print(f"input: {input_sequence}")
-            print(f"* Predicted Flavor: {output}")
-            print(f"* Target Flavor: {target_sequence}")
-            print(f"Fuzzy Score: {fuzzy_score}")
-            print("\n"+"="*40+"\n")
+    # constraint_ids = get_constraint_ids(tokenizer)
 
-    avg_fuzzy_score = total_fuzzy_score / len(test_dataset)
-    print(f"Average Fuzzy Score over test dataset: {avg_fuzzy_score}")
+    # Load the flan-T5 model
+    # model = ConstrainedT5.from_pretrained("google/flan-t5-base", constraint_ids=constraint_ids)
+
+    # Define training arguments and initialize trainer
+    training_args = TrainingArguments(
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        num_train_epochs=epochs,
+        evaluation_strategy="epoch",
+        logging_dir=logging_dir,
+        logging_strategy = 'steps',##
+        logging_steps=10,##
+        do_train=True,
+        do_eval=True,
+        output_dir=output_dir,
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model='loss',
+        greater_is_better=False,
+        learning_rate=lr,
+        warmup_steps=100,
+        weight_decay=0.01,
+    )
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        # tokenizer=tokenizer,
+        # compute_metrics=compute_metrics
+    )
+
+    # Train the model
+    # trainer.train()
+
+    # Save tokenizer
+    # tokenizer.save_pretrained(output_dir)
+    # model.save_pretrained(output_dir)
+
+    print("* Test start *")
+    test_results = trainer.evaluate(test_dataset) ## trainer.predict랑 같음.
+    print(test_results)
+
 
 
 if __name__ == '__main__':
-    main()
+    train()
+    # Load the fine-tuned model
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # model_path = '/nfs_share2/code/donghee/Food/best_model_with_constraints_datamodify'
+    # tokenizer = T5Tokenizer.from_pretrained(model_path)
+    # constraint_ids = get_constraint_ids(tokenizer)
+
+    # model = ConstrainedT5.from_pretrained(model_path, constraint_ids = constraint_ids)
+    # # model = model.to(device)
+
+    # test(model, tokenizer)
