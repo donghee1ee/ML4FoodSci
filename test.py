@@ -1,8 +1,8 @@
 from transformers import T5Tokenizer
-from model import ConstrainedT5
-from utils import get_constraint_ids
+from model.model import ConstrainedT5
+from model.utils import get_constraint_ids
 import torch
-from utils import prepare_data, TokenizerWrapper
+from model.utils import prepare_data, TokenizerWrapper
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import DataCollatorWithPadding
@@ -12,27 +12,30 @@ import json
 
 def test():
     ###
-    model_path = '/nfs_share2/code/donghee/Food/best_model_with_constraints_datamodify'
+    model_path = '/home/donghee/Food/best_model_with_equivariance'
     result_path = os.path.join(model_path, 'test_result.json')
+    start_token = '<start_chemical>'
     ###
+    prompt = 'Predict the flavor given the following chemical compounds: '
+
+    print("** Saving result to ", result_path)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load the fine-tuned model
-    tokenizer = T5Tokenizer.from_pretrained(model_path)
+    # tokenizer = T5Tokenizer.from_pretrained(model_path)
+    tokenizer = T5Tokenizer()
     constraint_ids = get_constraint_ids(tokenizer)
 
-    model = ConstrainedT5.from_pretrained(model_path, constraint_ids = constraint_ids)
+    model = ConstrainedT5.from_pretrained(model_path, constraint_ids = constraint_ids, start_token=start_token)
     model = model.to(device)
     model.eval()
-
-    prompt = 'Predict the flavor given the following chemical compounds: '
 
     _, _, test_df = prepare_data(prompt)
 
     test_dataset = Dataset.from_pandas(test_df)
 
-    tokenizer_wrapper = TokenizerWrapper(tokenizer)
+    tokenizer_wrapper = TokenizerWrapper(tokenizer, start_token)
     test_dataset = test_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
 
     # prediction = []

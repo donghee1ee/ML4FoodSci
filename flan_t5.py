@@ -13,8 +13,8 @@ import random
 import numpy as np
 import logging
 
-from model import ConstrainedT5
-from utils import get_constraint_ids, prepare_data, TokenizerWrapper
+from model.modeling_t5 import T5ForConditionalGeneration
+from model.utils import get_constraint_ids, prepare_data, TokenizerWrapper
 
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
@@ -125,14 +125,15 @@ def train():
     #######
     lr = 1e-04
     epochs = 20
-    batch_size = 8
-    output_dir="./best_model_with_constraints_large"
+    batch_size = 4
+    output_dir="./best_model_equivariance"
     logging_dir = './logs'
     model_name = "google/flan-t5-base"
+    start_token = '<start_chemical>'
     #######
     logger.info("####### main start #######")
 
-    train_df, val_df, test_df = prepare_data(prompt)
+    train_df, val_df, test_df = prepare_data(prompt, start_token)
 
     # Initialize the tokenizer
     # tokenizer = T5Tokenizer.from_pretrained("t5-small")
@@ -146,16 +147,19 @@ def train():
     # val_dataset = val_dataset.map(lambda x: tokenizer(x['input_text'], max_length=512, truncation=True), batched=True)
     # test_dataset = test_dataset.map(lambda x: tokenizer(x['input_text'], max_length=512, truncation=True), batched=True)
     tokenizer = T5Tokenizer.from_pretrained(model_name)
-    tokenizer_wrapper = TokenizerWrapper(tokenizer)
+    constraint_ids = get_constraint_ids(tokenizer)
+    # Load the flan-T5 model
+    model = T5ForConditionalGeneration.from_pretrained(model_name, constraint_ids=constraint_ids, start_token=start_token)
+
+    if start_token not in tokenizer.get_added_vocab():
+        tokenizer.add_tokens([start_token])
+        model.resize_token_embeddings(len(tokenizer))
+
+    tokenizer_wrapper = TokenizerWrapper(tokenizer, start_token)
 
     train_dataset = train_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
     val_dataset = val_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
     test_dataset = test_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
-
-    constraint_ids = get_constraint_ids(tokenizer)
-
-    # Load the flan-T5 model
-    model = ConstrainedT5.from_pretrained(model_name, constraint_ids=constraint_ids)
 
     # Define training arguments and initialize trainer
     training_args = TrainingArguments(
@@ -164,8 +168,8 @@ def train():
         num_train_epochs=epochs,
         evaluation_strategy="epoch",
         logging_dir=logging_dir,
-        logging_strategy = 'epoch',##
-        # logging_steps=10,##
+        logging_strategy = 'steps',##
+        logging_steps=10,##
         do_train=True,
         do_eval=True,
         output_dir=output_dir,
