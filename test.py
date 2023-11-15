@@ -1,5 +1,5 @@
 from transformers import T5Tokenizer
-from model.model import ConstrainedT5
+from model.modeling_t5 import T5ForConditionalGeneration
 from model.utils import get_constraint_ids
 import torch
 from model.utils import prepare_data, TokenizerWrapper
@@ -15,6 +15,7 @@ def test():
     model_path = '/home/donghee/Food/best_model_with_equivariance'
     result_path = os.path.join(model_path, 'test_result.json')
     start_token = '<start_chemical>'
+    model_name = "google/flan-t5-base"
     ###
     prompt = 'Predict the flavor given the following chemical compounds: '
 
@@ -23,11 +24,11 @@ def test():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load the fine-tuned model
-    # tokenizer = T5Tokenizer.from_pretrained(model_path)
-    tokenizer = T5Tokenizer()
+    tokenizer = T5Tokenizer.from_pretrained(model_path)
+    
     constraint_ids = get_constraint_ids(tokenizer)
 
-    model = ConstrainedT5.from_pretrained(model_path, constraint_ids = constraint_ids, start_token=start_token)
+    model = T5ForConditionalGeneration.from_pretrained(model_path, constraint_ids = constraint_ids, start_token=start_token)
     model = model.to(device)
     model.eval()
 
