@@ -7,6 +7,9 @@ import torch
 # import logging
 
 def get_constraint_ids(tokenizer):
+    """
+    return constraint ids containing only food related token ids
+    """
     conn = sqlite3.connect('flavordb.db')
     query = "SELECT entity_alias_readable FROM food_entities"
     df = pd.read_sql_query(query, conn)
@@ -16,7 +19,7 @@ def get_constraint_ids(tokenizer):
 
     return constraint_ids
 
-def prepare_data(prompt, start_token):
+def prepare_data(prompt):
     csv_df = pd.read_csv('entity_mole_group.csv')
     csv_df['molecule_id'] = csv_df['molecule_id'].apply(lambda x: list(ast.literal_eval(x.replace("{", "[").replace("}", "]"))))
 
@@ -38,13 +41,9 @@ def prepare_data(prompt, start_token):
 
     # df['input_text'] = df['molecule_name'].apply(lambda x: ', '.join(sorted(x, key=lambda k: random.random())))
     # df['input_text'] = prompt + df['input_text']
-    df['input_text'] = prompt + start_token + df['molecule_name'].apply(lambda x: ', '.join(sorted(x, key=lambda k: random.random())))
+    df['input_text'] = prompt + df['molecule_name'].apply(lambda x: ', '.join(sorted(x, key=lambda k: random.random())))
     df['labels'] = df['entity_name']
     df['output_text'] = df['entity_name']
-
-    for entry in df['entity_name']:
-        if 'Squirrels' in entry:
-            print("stop")
 
     train_df, temp_df = train_test_split(df, test_size=0.3, random_state=42)
     val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42)
@@ -52,10 +51,11 @@ def prepare_data(prompt, start_token):
     return train_df, val_df, test_df
 
 class TokenizerWrapper:
-    def __init__(self, tokenizer, start_token=None, max_compounds=100):
+    def __init__(self, tokenizer, prompt, max_compounds=100):
         self.tokenizer = tokenizer
-        self.start_token = start_token
         self.max_compounds = max_compounds
+        self.prompt = prompt
+        self.prompt_len = len(self.tokenizer.encode(self.prompt, add_special_tokens=True))
 
     def tokenize_function(self, examples):
         tokenized_input = self.tokenizer(
@@ -74,8 +74,8 @@ class TokenizerWrapper:
         )
 
         # Find the position of the special token
-        start_token_id = self.tokenizer.encode(self.start_token, add_special_tokens=False)[0]
-        start_positions = (tokenized_input.input_ids == start_token_id).nonzero(as_tuple=True)[1] ## shape (655)
+        # start_token_id = self.tokenizer.encode(self.start_token, add_special_tokens=False)[0]
+        # start_positions = (tokenized_input.input_ids == start_token_id).nonzero(as_tuple=True)[1] ## shape (655)
 
         #  # Calculate compound positions
         # compound_positions = [
@@ -100,7 +100,6 @@ class TokenizerWrapper:
         # Pad compound_positions to have a uniform length
         compound_positions = [self.pad_positions(pos) for pos in compound_positions]
 
-
         return {
             'input_ids': tokenized_input.input_ids,
             'attention_mask': tokenized_input.attention_mask,
@@ -110,8 +109,8 @@ class TokenizerWrapper:
     
     def calculate_compound_positions(self, input_text, input_ids):
         # Split the input text into individual compounds
-        compounds = input_text.split(self.start_token)[-1].split(', ')
-        current_position = input_ids.tolist().index(self.tokenizer.encode(self.start_token, add_special_tokens=False)[0]) + 1
+        compounds = input_text.split(self.prompt)[-1].split(', ')
+        current_position = self.prompt_len
 
         # Initialize positions with -1 (for padding)
         positions = [-1] * len(input_ids)
@@ -201,52 +200,6 @@ class TokenizerWrapper:
 #         batch_relative_position_matrices.append(relative_position_matrix)
 
 #     return batch_relative_position_matrices
-
-def compute_invariant_position_batch(batch_query_length, batch_key_length, batch_positions):
-    batch_relative_position_matrices = []
-
-    for positions in batch_positions:
-        # Convert positions to a tensor for efficient processing
-        positions_tensor = torch.tensor(positions)
-
-        # Create a 2D grid of query and key indices
-        query_indices = positions_tensor.unsqueeze(1).expand(-1, batch_key_length)
-        key_indices = positions_tensor.unsqueeze(0).expand(batch_query_length, -1)
-
-        # Compare the compound IDs of query and key indices
-        same_compound_matrix = (query_indices == key_indices)
-
-        # Handle padding: if either query or key is a padding token (-1), they are not in the same compound
-        padding_mask = (query_indices == -1) | (key_indices == -1)
-        same_compound_matrix[padding_mask] = False
-
-        # Assign relative position based on whether they are in the same compound
-        relative_position_matrix = torch.where(same_compound_matrix, torch.zeros_like(same_compound_matrix, dtype=torch.long), torch.ones_like(same_compound_matrix, dtype=torch.long))
-
-        batch_relative_position_matrices.append(relative_position_matrix)
-
-    return batch_relative_position_matrices
-
-
-def get_compound_masks(length, positions):
-    """
-    Generate compound masks for a single example.
-
-    Parameters:
-    - length (int): The length of the sequence.
-    - positions (list of tuples): Compound positions for a single example.
-
-    Returns:
-    - A dictionary containing compound masks for the example.
-    """
-    compound_masks = {}
-    for compound_id, (start, end) in enumerate(positions):
-        # Check for padding indicator and skip if found
-        if start == -1 and end == -1:
-            continue
-        mask = [start <= idx <= end for idx in range(length)]
-        compound_masks[compound_id] = mask
-    return compound_masks
 
 
 

@@ -145,10 +145,10 @@ def custom_train():
 
 def main():
     #######
-    lr = 1e-04
+    # lr = 1e-04
     epochs = 20
     batch_size = 8
-    output_dir="./best_model3"
+    output_dir="./temp"
     #######
 
     train_df, val_df, test_df = prepare_data()
@@ -188,8 +188,7 @@ def main():
 
     train_dataset = train_dataset.map(tokenize_function, batched=True)
     val_dataset = val_dataset.map(tokenize_function, batched=True)
-    test_dataset = test_dataset.map(tokenize_function, batched=True)
-
+    test_dataset = test_dataset.map(tokenize_function, batched=True) # TODO store in local
 
     # Load the T5 model
     model = T5ForConditionalGeneration.from_pretrained("t5-base")
@@ -209,7 +208,6 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model='fuzzy_ratio',
         greater_is_better=True,
-        learning_rate=lr,
     )
 
     trainer = Trainer(
@@ -229,7 +227,9 @@ def main():
     model.save_pretrained(output_dir)
 
     print("* Test start *")
-    test(model, tokenizer, test_dataset)
+    # result = test(model, tokenizer, test_dataset)
+    result = trainer.evaluate() # TODO test?
+    print(result)
     print("END")
 
 def test(model, tokenizer, test_dataset): ## TODO ## test_dataset batchsize 안 정해줘서 그냥 하나씩?

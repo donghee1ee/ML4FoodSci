@@ -14,6 +14,7 @@ import numpy as np
 import logging
 
 from model.modeling_t5 import T5ForConditionalGeneration
+from model.model import ConstrainedT5
 from model.utils import get_constraint_ids, prepare_data, TokenizerWrapper
 
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
@@ -126,14 +127,14 @@ def train():
     lr = 1e-04
     epochs = 20
     batch_size = 4
-    output_dir="./best_model_equivariance"
-    logging_dir = './logs'
+    output_dir="./best_model_equivariance_fix"
+    logging_dir = './logs' ## TODO
     model_name = "google/flan-t5-base"
-    start_token = '<start_chemical>'
+    # start_token = '<start_chemical>'
     #######
     logger.info("####### main start #######")
 
-    train_df, val_df, test_df = prepare_data(prompt, start_token)
+    train_df, val_df, test_df = prepare_data(prompt)
 
     # Initialize the tokenizer
     # tokenizer = T5Tokenizer.from_pretrained("t5-small")
@@ -149,17 +150,21 @@ def train():
     tokenizer = T5Tokenizer.from_pretrained(model_name)
     constraint_ids = get_constraint_ids(tokenizer)
     # Load the flan-T5 model
-    model = T5ForConditionalGeneration.from_pretrained(model_name, constraint_ids=constraint_ids, start_token=start_token)
+    # model = T5ForConditionalGeneration.from_pretrained(model_name, constraint_ids=constraint_ids)
+    model = ConstrainedT5.from_pretrained(model_name, constraint_ids = constraint_ids)
 
-    if start_token not in tokenizer.get_added_vocab():
-        tokenizer.add_tokens([start_token])
-        model.resize_token_embeddings(len(tokenizer))
+    # if start_token not in tokenizer.get_added_vocab():
+    #     tokenizer.add_tokens([start_token])
+    #     model.resize_token_embeddings(len(tokenizer))
 
-    tokenizer_wrapper = TokenizerWrapper(tokenizer, start_token)
+    tokenizer_wrapper = TokenizerWrapper(tokenizer, prompt = prompt)
 
     train_dataset = train_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
     val_dataset = val_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
-    test_dataset = test_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
+    test_dataset = test_dataset.map(tokenizer_wrapper.tokenize_function, batched=True) # TODO store locally
+
+    # Save tokenizer
+    tokenizer.save_pretrained(output_dir)
 
     # Define training arguments and initialize trainer
     training_args = TrainingArguments(
@@ -194,14 +199,12 @@ def train():
     # Train the model
     trainer.train()
 
-    # Save tokenizer
-    tokenizer.save_pretrained(output_dir)
     model.save_pretrained(output_dir)
 
     print("* Test start *")
     test_results = trainer.evaluate(test_dataset)
     print(test_results)
-    print("")
+    print("END")
 
 
 def test(model, tokenizer): ## TODO ## test_dataset batchsize 안 정해줘서 그냥 하나씩?

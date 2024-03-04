@@ -51,7 +51,7 @@ from transformers.utils import (
 from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
 from transformers.models.t5.configuration_t5 import T5Config
 
-from .utils import compute_invariant_position_batch, get_compound_masks
+from .invariant_position import compute_invariant_position_batch, compute_invariant_position_nontable
 
 logger = logging.get_logger(__name__)
 
@@ -468,31 +468,19 @@ class T5Attention(nn.Module):
     #     values = values.permute([0, 3, 1, 2])  # shape (batch_size, num_heads, query_length, key_length)
     #     return values
 
-    def compute_invariant_bias(self, query_length, key_length, batch_positions):
+    def compute_invariant_bias(self, query_length, key_length, positions):
         # Compute a batch of relative position matrices
-        batch_relative_position = compute_invariant_position_batch(query_length, key_length, batch_positions)
-
-        # Process each relative position matrix in the batch
-        batch_values = []
-        for relative_position in batch_relative_position:
-            relative_position_bucket = self._relative_position_bucket(
-                relative_position,  # shape (query_length, key_length)
-                bidirectional=(not self.is_decoder),
-                num_buckets=self.relative_attention_num_buckets,
-            )
-            relative_position_bucket = relative_position_bucket.to(self.relative_attention_bias.weight.device)
-
-            # shape of values (query_length, key_length, num_heads)
-            values = self.relative_attention_bias(relative_position_bucket)
-            values = values.permute([2, 0, 1])  # shape (num_heads, query_length, key_length)
-
-            batch_values.append(values)
-
-        # Combine the values for the entire batch
-        # Assuming batch_values is a list of tensors with shape (num_heads, query_length, key_length)
-        combined_values = torch.stack(batch_values, dim=0)  # shape (batch_size, num_heads, query_length, key_length)
-
-        return combined_values
+        relative_position = compute_invariant_position_nontable(query_length, key_length, positions)
+        relative_position_bucket = self._relative_position_bucket(
+            relative_position,  # shape (batch_size, query_length, key_length)
+            bidirectional=(not self.is_decoder),
+            num_buckets=self.relative_attention_num_buckets,
+        )
+        relative_position_bucket = relative_position_bucket.to(self.relative_attention_bias.weight.device)
+        # shape of values (batch_size, query_length, key_length, num_heads)
+        values = self.relative_attention_bias(relative_position_bucket)
+        values = values.permute([0, 3, 1, 2])  # shape (batch_size, num_heads, query_length, key_length)
+        return values
 
     
     def forward(
@@ -1615,7 +1603,7 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
     ]
     _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight", "lm_head.weight"]
 
-    def __init__(self, config: T5Config, constraint_ids=None, start_token=None):
+    def __init__(self, config: T5Config, constraint_ids=None):
         super().__init__(config)
         self.model_dim = config.d_model
 
@@ -1644,7 +1632,6 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
 
         # constraint
         self.constraint_ids = constraint_ids
-        self.start_token=start_token
 
     # TODO decorator?
     def enforce_constraints(self, next_token_logits):

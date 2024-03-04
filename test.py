@@ -12,11 +12,11 @@ import json
 
 def test():
     ###
-    model_path = '/home/donghee/Food/best_model_with_equivariance'
+    model_path = '/home/donghee/Food/best_model_equivariance_fix'
     result_path = os.path.join(model_path, 'test_result.json')
-    start_token = '<start_chemical>'
-    model_name = "google/flan-t5-base"
+    # start_token = '<start_chemical>'
     ###
+    assert os.path.exists(model_path)
     prompt = 'Predict the flavor given the following chemical compounds: '
 
     print("** Saving result to ", result_path)
@@ -28,7 +28,7 @@ def test():
     
     constraint_ids = get_constraint_ids(tokenizer)
 
-    model = T5ForConditionalGeneration.from_pretrained(model_path, constraint_ids = constraint_ids, start_token=start_token)
+    model = T5ForConditionalGeneration.from_pretrained(model_path, constraint_ids = constraint_ids)
     model = model.to(device)
     model.eval()
 
@@ -36,7 +36,7 @@ def test():
 
     test_dataset = Dataset.from_pandas(test_df)
 
-    tokenizer_wrapper = TokenizerWrapper(tokenizer, start_token)
+    tokenizer_wrapper = TokenizerWrapper(tokenizer, prompt = prompt)
     test_dataset = test_dataset.map(tokenizer_wrapper.tokenize_function, batched=True)
 
     # prediction = []
@@ -96,7 +96,7 @@ def test():
         # })
     
     with open(result_path, 'w') as f:
-        json.dump(result_list, f)
+        json.dump(result_list, f, indent=4)
 
 
     # # Create a new dataset with only 'input_ids' and 'attention_mask'
